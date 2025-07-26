@@ -30,6 +30,7 @@
     "langchain": "^0.3.30",
     "mammoth": "^1.9.1",
     "multer": "^2.0.2",
+    "pdf-parse": "^1.1.1",
     "postgres": "^3.4.7",
     "tiktoken": "^1.0.21",
     "xlsx": "^0.18.5",

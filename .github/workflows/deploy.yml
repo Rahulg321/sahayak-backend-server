@@ -48,5 +48,5 @@ jobs:
               --platform managed \
               --region ${{ env.REGION }} \
               --allow-unauthenticated \
-              --set-env-vars "POSTGRES_URL=${{ secrets.POSTGRES_URL }},AUTH_SECRET=${{ secrets.AUTH_SECRET }},GOOGLE_GEMINI_API_KEY=${{ secrets.GOOGLE_GEMINI_API_KEY }},NODE_ENV=production" \
+              --set-env-vars "POSTGRES_URL=${{ secrets.POSTGRES_URL }},AUTH_SECRET=${{ secrets.AUTH_SECRET }}, GOOGLE_GENERATIVE_AI_API_KEY=${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }},GOOGLE_GEMINI_API_KEY=${{ secrets.GOOGLE_GEMINI_API_KEY }},NODE_ENV=production" \
               --timeout=900s

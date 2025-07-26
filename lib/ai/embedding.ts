@@ -1,7 +1,6 @@
 import { embed, embedMany } from "ai";
 import { embeddings, resources } from "../db/schema";
 import { cosineDistance, desc, gt, sql } from "drizzle-orm";
-import { db } from "../db/queries";
 import { embeddings as embeddingsTable } from "../db/schema";
 import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
 import { encoding_for_model } from "tiktoken";
@@ -93,9 +92,7 @@ export const generateEmbeddings = async (value: string) => {
   }));
 };
 
-export const generateEmbeddingsFromChunks = async (
-  chunks: string[]
-): Promise<Array<{ embedding: number[]; content: string }>> => {
+export const generateEmbeddingsFromChunks = async (chunks: string[]) => {
   const encoder = encoding_for_model("text-embedding-3-small");
   const maxTokens = 300000;
   const batches: string[][] = [];
@@ -121,13 +118,19 @@ export const generateEmbeddingsFromChunks = async (
 
   let allEmbeddings: Array<{ embedding: number[]; content: string }> = [];
   for (const batch of batches) {
-    const { embeddings } = await embedMany({
-      model: google.textEmbeddingModel("text-embedding-004"),
-      values: batch,
+    const response = await googleGenAIProvider.models.embedContent({
+      model: "gemini-embedding-001",
+      contents: batch,
+      config: {
+        outputDimensionality: 1536,
+      },
     });
 
     allEmbeddings = allEmbeddings.concat(
-      embeddings.map((e, i) => ({ content: batch[i]!, embedding: e }))
+      response?.embeddings?.map((e, i) => ({
+        embedding: e.values ?? [],
+        content: batch[i] ?? "",
+      })) ?? []
     );
   }
   encoder.free();
@@ -142,50 +145,19 @@ export const generateEmbeddingsFromChunks = async (
 export const generateEmbedding = async (value: string): Promise<number[]> => {
   console.log("Generating embedding for value:", value);
   const input = value.replaceAll("\\n", " ");
-  const { embedding } = await embed({
-    model: google.textEmbeddingModel("text-embedding-004"),
-    value: input,
-  });
-  return embedding;
-};
-
-export const findRelevantContent = async (userQuery: string) => {
-  console.log("Finding relevant content for user query:", userQuery);
-
-  // Generate embedding for the user query
-  const userQueryEmbedded = await generateEmbedding(userQuery);
-
-  // Calculate similarity using cosine distance
-  const similarity = sql<number>`1 - (${cosineDistance(
-    embeddings.embedding,
-    userQueryEmbedded
-  )})`;
-
-  // Query for similar content with improved filtering and ranking
-  const similarGuides = await db
-    .select({
-      content: embeddingsTable.content,
-      similarity,
-      // Add metadata if available in your schema
-      resourceId: embeddingsTable.resourceId,
-    })
-    .from(embeddingsTable)
-    // Lower threshold for more matches, but still maintain quality
-    .where(gt(similarity, 0.4))
-    // Order by similarity for best matches first
-    .orderBy((t) => desc(t.similarity))
-    // Increase limit for more context
-    .limit(6);
-
-  // Filter out very low similarity matches
-  const filteredGuides = similarGuides.filter(
-    (guide) => guide.similarity > 0.5
-  );
-
-  console.log("Similar guides found:", filteredGuides);
-
-  // Return the most relevant content
-  return filteredGuides;
+  try {
+    const response = await googleGenAIProvider.models.embedContent({
+      model: "gemini-embedding-001",
+      contents: input,
+      config: {
+        outputDimensionality: 1536,
+      },
+    });
+    return response?.embeddings?.[0]?.values ?? [];
+  } catch (error) {
+    console.log(error);
+    return [];
+  }
 };
 
 // export const findRelevantContent = async (userQuery: string) => {
@@ -208,31 +180,3 @@ export const findRelevantContent = async (userQuery: string) => {
 
 //   return similarGuides;
 // };
-
-export const findRelevantForASpecificCompany = async (
-  userQuery: string,
-  companyId: string
-) => {
-  console.log("Finding relevant content for user query:", userQuery);
-  const userQueryEmbedded = await generateEmbedding(userQuery);
-  const similarity = sql<number>`1 - (${cosineDistance(
-    embeddings.embedding,
-    userQueryEmbedded
-  )})`;
-
-  const similarGuides = await db
-    .select({
-      embeddingId: embeddingsTable.id,
-      embeddingContent: embeddingsTable.content,
-      similarity,
-    })
-    .from(embeddingsTable)
-    .innerJoin(resources, sql`${embeddingsTable.resourceId} = ${resources.id}`)
-    .where(sql`${similarity} > 0.5`)
-    .orderBy((t) => desc(t.similarity))
-    .limit(2);
-
-  console.log("Similar guides found:", similarGuides);
-
-  return similarGuides;
-};

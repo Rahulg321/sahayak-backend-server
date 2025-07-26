@@ -1,11 +1,10 @@
 import { Router, type Request, type Response } from "express";
 import authenticateToken from "../middleware/authenticate-token";
 import { put } from "@vercel/blob";
-import { db } from "../lib/db/queries";
 import { embeddings as embeddingsTable, resources } from "../lib/db/schema";
 import multer from "multer";
 import { PDFLoader } from "../lib/pdf-loader";
-import { googleGenAIProvider } from "../lib/ai/providers";
+import { googleAISDKProvider, googleGenAIProvider } from "../lib/ai/providers";
 import ExcelLoader from "../lib/excel-loader";
 import { DocxLoader } from "../lib/docx-loader";
 import { processLargePdfURL } from "../lib/ai/process-pdf-url";
@@ -13,6 +12,8 @@ import {
   generateChunksFromText,
   generateEmbeddingsFromChunks,
 } from "../lib/ai/embedding";
+import { db } from "../lib/db/queries";
+import { generateText } from "ai";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -45,7 +46,7 @@ router.post(
     }
 
     if (!subjectId) {
-      throw new Error("No company ID provided");
+      throw new Error("No subject ID provided");
     }
 
     // Get file type
@@ -66,18 +67,24 @@ router.post(
     try {
       const data = await put(`${fileName}`, buffer, {
         access: "public",
+        allowOverwrite: true,
       });
 
       fileUploadedUrl = data.url;
     } catch (error) {
       console.error(error);
-      res.status(500).json({
+      return res.status(500).json({
         message:
           error instanceof Error
             ? error.message
             : "Error uploading file to Vercel Blob",
       });
     }
+
+    console.log(
+      "file was successfully uploaded to vercel blob",
+      fileUploadedUrl
+    );
 
     if (fileType === "application/pdf") {
       const pdfLoader = new PDFLoader();
@@ -87,7 +94,36 @@ router.post(
 
       console.log("analysing pdf using AI");
 
-      responseText = await processLargePdfURL(fileUploadedUrl, fileName);
+      //   responseText = await processLargePdfURL(fileUploadedUrl, fileName);
+
+      try {
+        const result = await generateText({
+          model: googleAISDKProvider("gemini-1.5-flash"),
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "What is an embedding model according to this document?",
+                },
+                {
+                  type: "file",
+                  data: buffer,
+                  mimeType: "application/pdf",
+                },
+              ],
+            },
+          ],
+        });
+
+        console.log(result.text);
+
+        responseText = result.text as string;
+      } catch (error) {
+        console.log("error analysing pdf using AI");
+        console.log(error);
+      }
 
       // Combine raw content with AI summary
       content = `Name: ${name}\nDescription: ${description}\n\n Original Content:\n\n${rawContent}\n\nAI Analysis:\n\n${responseText}`;
@@ -243,32 +279,60 @@ router.post(
 
     try {
       console.log("=== Generating Embeddings ===");
-      const embeddings = await generateEmbeddingsFromChunks(embeddingInput);
-      console.log("Embeddings generated:", embeddings.length);
-      console.log("First embedding length:", embeddings[0]?.embedding?.length);
+      let embeddings;
+      try {
+        embeddings = await generateEmbeddingsFromChunks(embeddingInput);
+        console.log("Embeddings generated:", embeddings.length);
+        console.log(
+          "First embedding length:",
+          embeddings[0]?.embedding?.length
+        );
+      } catch (error) {
+        console.log("error generating embeddings", error);
+        return res.status(500).json({
+          message:
+            error instanceof Error
+              ? error.message
+              : "Error generating embeddings",
+        });
+      }
 
       console.log("=== Saving to Database ===");
-      const [resource] = await db
-        .insert(resources)
-        .values({
-          content,
-          name,
-          description,
-          fileUrl: fileUploadedUrl,
-          subjectId,
-          kind: kind as any,
-        })
-        .returning();
 
-      console.log("Resource saved with ID:", resource?.id);
-      console.log("Resource content length in DB:", resource?.content?.length);
+      try {
+        const [resource] = await db
+          .insert(resources)
+          .values({
+            content,
+            name,
+            description,
+            fileUrl: fileUploadedUrl,
+            subjectId,
+            kind: kind as any,
+          })
+          .returning();
 
-      await db.insert(embeddingsTable).values(
-        embeddings.map((embedding) => ({
-          resourceId: resource!.id,
-          ...embedding,
-        }))
-      );
+        console.log("Resource saved with ID:", resource?.id);
+        console.log(
+          "Resource content length in DB:",
+          resource?.content?.length
+        );
+
+        await db.insert(embeddingsTable).values(
+          embeddings.map((embedding) => ({
+            resourceId: resource!.id,
+            ...embedding,
+          }))
+        );
+      } catch (error) {
+        console.log("error saving resource to database", error);
+        return res.status(500).json({
+          message:
+            error instanceof Error
+              ? error.message
+              : "Error saving resource to database",
+        });
+      }
 
       console.log("Embeddings saved to database");
       console.log("Resource and embeddings were created successfully!!!");
